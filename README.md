@@ -1,10 +1,10 @@
 # Fuzzy Covert Time-Lock Puzzles (FCTLP)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Magma Compatible](https://img.shields.io/badge/Language-Magma%20V2.29--10-blue.svg)](http://magma.maths.usyd.edu.au/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24380778.svg)](https://doi.org/10.5281/zenodo.24380778)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+[![Magma Compatible](https://img.shields.io/badge/Language-Magma%20V2.29--10-blue.svg)](http://magma.maths.usyd.edu.au/calc/)
 [![Code Rate](https://img.shields.io/badge/Code%20Rate-R%3D0.75-green.svg)]()
-[![Pairing](https://img.shields.io/badge/Curve-BLS12--381-purple.svg)]()
 
 This repository contains the proof-of-concept (PoC) implementation and cryptanalytic verification suite for **Fuzzy Covert Time-Lock Puzzles via Sequential Noise Stripping (FCTLP)**—a hybrid cryptographic primitive unifying sequential time-delay release, fuzzy attribute-based access control, and zero-metadata steganographic transport.
 
