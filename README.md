@@ -81,12 +81,17 @@ The complete proof-of-concept and cryptanalytic test suite runs directly in the 
 
 If you utilize these constructions or Magma benchmarks in your research, please cite:
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24380778.svg)](https://doi.org/10.5281/zenodo.24380778)
+
 ```bibtex
+
 @misc{chmora2026fctlp,
   author       = {Andrey L. Chmora},
   title        = {Fuzzy Covert Time-Lock Puzzles via Sequential Noise Stripping},
   month        = nov,
-  year         = {2026},
-  publisher    = {Zenodo}
+  year         = 2026,
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.24380778},
+  url          = {https://doi.org/10.5281/zenodo.24380778}
 }
 ```
