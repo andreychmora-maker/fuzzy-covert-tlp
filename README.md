@@ -1,6 +1,6 @@
 # Fuzzy Covert Time-Lock Puzzles (FCTLP)
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24380778.svg)](https://doi.org/10.5281/zenodo.24380778)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24382646.svg)](https://doi.org/10.5281/zenodo.24382646)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [![Magma Compatible](https://img.shields.io/badge/Language-Magma%20V2.29--10-blue.svg)](http://magma.maths.usyd.edu.au/calc/)
