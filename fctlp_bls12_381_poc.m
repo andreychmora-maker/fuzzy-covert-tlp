@@ -1,8 +1,8 @@
 /*==============================================================================
   Fuzzy Covert Time-Lock Puzzle (FCTLP) — End-to-End PoC & Benchmark
   Architecture: RSW Sequential Core + Scrambled RS[255,192,64]_256 +
-                Split-Key Helper/MPC O(1) Broadcast over BLS12-381
-                (Precomputed-Q Optimal Ate Pairing + Fast FinalExp + G_T LUT)
+                Zero-RTT Native Stealth ABBE O(1) Broadcast over BLS12-381
+                (G_1 x G_1 + Dual-Pairing Optimal Ate with Shared FinalExp + LUT)
   Compatible with: Magma V2.29+ / Magma Online Calculator (< 60s timeout)
 ==============================================================================*/
 
@@ -121,14 +121,14 @@ phi_N := (p_rsa - 1) * (q_rsa - 1);
 T_delay := 5000;
 printf "  RSW 2048-bit Modulus N generated in %.3o sec (Delay T = %o).\n", Cputime(t0), T_delay;
 
-// 1C. BLS12-381 Type-3 Optimal Ate Pairing Setup (G1 on E1/Fp, G2 on E2_twist/Fp2)
+// 1C. BLS12-381 Type-3 Optimal Ate Pairing Setup (prime order ell)
 t0 := Cputime();
 x_bls := -0xd201000000010000;
 u0    := -x_bls; // 64-bit, Hamming weight 6
 u0_bits := Reverse(Intseq(u0, 2)); // MSB first
 
-p_bls := (x_bls - 1)^2 * (x_bls^4 - x_bls^2 + 1) div 3 + x_bls;
-r_bls := x_bls^4 - x_bls^2 + 1;
+p_bls   := (x_bls - 1)^2 * (x_bls^4 - x_bls^2 + 1) div 3 + x_bls;
+ell_bls := x_bls^4 - x_bls^2 + 1;
 assert (p_bls - 1) mod 6 eq 0;
 
 Fp := GF(p_bls);
@@ -138,12 +138,12 @@ Fp12<w> := ext<Fp2 | Polynomial([Fp2 | -(1 + u), 0, 0, 0, 0, 0, 1])>;
 E1 := EllipticCurve([Fp | 0, 4]);
 E2_twist := EllipticCurve([Fp2 | 0, 4*(1 + u)]);
 
-h1 := #E1 div r_bls;
+h1 := #E1 div ell_bls;
 repeat
     G1_E1 := h1 * Random(E1);
 until not IsZero(G1_E1);
 
-h2 := #E2_twist div r_bls;
+h2 := #E2_twist div ell_bls;
 repeat
     G2_E2 := h2 * Random(E2_twist);
 until not IsZero(G2_E2);
@@ -180,7 +180,7 @@ assert FrobP(f_chk)  eq f_chk^p_bls;
 assert FrobP2(f_chk) eq f_chk^(p_bls^2);
 assert FrobP6(f_chk) eq f_chk^(p_bls^6);
 
-// Precompute doubling & addition line coefficients for a fixed Q in E2_twist[r]
+// Precompute doubling & addition line coefficients for a fixed Q in E2_twist[ell]
 PrecomputeQ := function(Q)
     XQ := Q[1]; YQ := Q[2];
     XT := XQ;   YT := YQ;
@@ -205,9 +205,26 @@ PrecomputeQ := function(Q)
     return <dbl_lines, add_lines>;
 end function;
 
-// Optimal Ate Pairing e(P, Q) with precomputed Q_pre and fast BLS12 hard-part
-// Final exponent: (p^6 - 1)*(p^2 + 1) * (3*(p^4 - p^2 + 1)/r)
-// where 3*(p^4 - p^2 + 1)/r = (x - 1)^2*(p + x)*(p^2 + x^2 - 1) + 3
+// Fast BLS12-381 Final Exponentiation:
+// (p^6 - 1)*(p^2 + 1) * (3*(p^4 - p^2 + 1)/ell)
+// where 3*(p^4 - p^2 + 1)/ell = (x - 1)^2*(p + x)*(p^2 + x^2 - 1) + 3
+FinalExp := function(f)
+    // Easy part: f2 = f^((p^6 - 1)*(p^2 + 1)) in cyclotomic subgroup G_{Phi_6}
+    f1 := FrobP6(f) * f^-1;
+    f2 := FrobP2(f1) * f1;
+
+    // Hard part: 5 exponentiations by 64-bit u0 (weight 6)
+    t0 := f2^u0;
+    t1 := t0 * f2;                     // (u0 + 1)
+    t2 := (t1^u0) * t1;                // (u0 + 1)^2 = (x - 1)^2
+    t3 := FrobP(t2) * FrobP6(t2^u0);   // (x - 1)^2 * (p + x)
+    t4 := t3^u0;
+    t5 := t4^u0;                       // (x - 1)^2 * (p + x) * x^2
+    t6 := FrobP2(t3) * t5 * FrobP6(t3);// (x - 1)^2 * (p + x) * (p^2 + x^2 - 1)
+    return t6 * (f2^2 * f2);           // + 3
+end function;
+
+// Single Optimal Ate Pairing e(P, Q) with precomputed Q_pre
 PairPre := function(P, Q_pre)
     if IsZero(P) then return Fp12!1; end if;
     xP := Fp2!P[1];
@@ -226,92 +243,66 @@ PairPre := function(P, Q_pre)
             f *:= Fp12![a[1], 0, a[2] * xP, yP, 0, 0];
         end if;
     end for;
-
-    // Easy part: f2 = f^((p^6 - 1)*(p^2 + 1)) in cyclotomic subgroup G_{Phi_6}
-    f1 := FrobP6(f) * f^-1;
-    f2 := FrobP2(f1) * f1;
-
-    // Hard part: 5 exponentiations by 64-bit u0 (weight 6)
-    t0 := f2^u0;
-    t1 := t0 * f2;                     // (u0 + 1)
-    t2 := (t1^u0) * t1;                // (u0 + 1)^2 = (x - 1)^2
-    t3 := FrobP(t2) * FrobP6(t2^u0);   // (x - 1)^2 * (p + x)
-    t4 := t3^u0;
-    t5 := t4^u0;                       // (x - 1)^2 * (p + x) * x^2
-    t6 := FrobP2(t3) * t5 * FrobP6(t3);// (x - 1)^2 * (p + x) * (p^2 + x^2 - 1)
-    return t6 * (f2^2 * f2);           // + 3
+    return FinalExp(f);
 end function;
 
-// 4-bit fixed-base exponentiation table in G_T
-BuildPowTable := function(base, nbits)
-    nwin := (nbits + 3) div 4;
-    tbl := [];
-    cur_base := base;
-    for w_idx in [1..nwin] do
-        row := [cur_base];
-        for d in [2..15] do
-            Append(~row, row[d - 1] * cur_base);
-        end for;
-        Append(~tbl, row);
-        cur_base := row[15] * cur_base;
-    end for;
-    return tbl;
-end function;
+// Dual-Pairing Product e(P1, Q1) * e(P2, Q2) sharing a SINGLE FinalExp
+Pair2Pre := function(P1, Q1_pre, P2, Q2_pre)
+    if IsZero(P1) then return PairPre(P2, Q2_pre); end if;
+    if IsZero(P2) then return PairPre(P1, Q1_pre); end if;
 
-FastPow := function(tbl, e)
-    if e eq 0 then return Fp12!1; end if;
-    digs := Intseq(e, 16);
-    res := Fp12!1;
-    for i in [1..#digs] do
-        d := digs[i];
-        if d ne 0 then
-            res *:= tbl[i][d];
+    xP1 := Fp2!P1[1]; yP1 := Fp2!P1[2];
+    xP2 := Fp2!P2[1]; yP2 := Fp2!P2[2];
+    dbl1 := Q1_pre[1]; add1 := Q1_pre[2];
+    dbl2 := Q2_pre[1]; add2 := Q2_pre[2];
+
+    f := Fp12!1;
+    add_idx := 1;
+    for i in [2..#u0_bits] do
+        d1 := dbl1[i - 1];
+        d2 := dbl2[i - 1];
+        l1 := Fp12![d1[1], 0, d1[2] * xP1, yP1, 0, 0];
+        l2 := Fp12![d2[1], 0, d2[2] * xP2, yP2, 0, 0];
+        f := f^2 * l1 * l2;
+        if u0_bits[i] eq 1 then
+            a1 := add1[add_idx];
+            a2 := add2[add_idx];
+            add_idx +:= 1;
+            l1 := Fp12![a1[1], 0, a1[2] * xP1, yP1, 0, 0];
+            l2 := Fp12![a2[1], 0, a2[2] * xP2, yP2, 0, 0];
+            f *:= l1 * l2;
         end if;
     end for;
-    return res;
+    return FinalExp(f);
 end function;
 
-// Self-check non-degeneracy, order, and bilinearity of PairPre
+// Master keypair & Receiver U_R split keypair (S_UR + H_R = [alpha]G_2)
 pre_G2 := PrecomputeQ(G2_E2);
 g_T    := PairPre(G1_E1, pre_G2);
-assert (g_T ne Fp12!1) and (g_T^r_bls eq Fp12!1);
-chk_a := Random(1, r_bls - 1);
-chk_b := Random(1, r_bls - 1);
-assert PairPre(chk_a * G1_E1, PrecomputeQ(chk_b * G2_E2)) eq g_T^((chk_a * chk_b) mod r_bls);
+assert (g_T ne Fp12!1) and (g_T^ell_bls eq Fp12!1);
 
-alpha_msk := Random(1, r_bls - 1);
+alpha_msk := Random(1, ell_bls - 1);
 P_pub_E1  := alpha_msk * G1_E1;
-pair_pub  := PairPre(P_pub_E1, pre_G2);
 
-// True Split-Key Provisioning for Receiver U_R:
-//   - Receiver U_R holds ONLY S_UR (never sees H_R or plaintext M_R)
-//   - Helper / MPC holds ONLY H_R, h_UR = e(G1, S_UR), and encrypted AC_R
-s_share  := Random(1, r_bls - 1);
-S_UR     := s_share * G2_E2;
-neg_S_UR := -S_UR;
-H_R      := ((alpha_msk - s_share) mod r_bls) * G2_E2;
-neg_H_R  := -H_R;
-assert S_UR + H_R eq alpha_msk * G2_E2;
+s_share := Random(1, ell_bls - 1);
+S_UR    := s_share * G2_E2;
+H_R     := ((alpha_msk - s_share) mod ell_bls) * G2_E2;
+DK_R    := S_UR + H_R;
+assert DK_R eq alpha_msk * G2_E2;
+pre_neg_DK := PrecomputeQ(-DK_R);
 
-pre_S_UR     := PrecomputeQ(S_UR);
-pre_neg_S_UR := PrecomputeQ(neg_S_UR);
-pre_neg_H_R  := PrecomputeQ(neg_H_R);
-h_UR         := PairPre(G1_E1, pre_S_UR);
-assert pair_pub * PairPre(G1_E1, pre_neg_H_R) eq h_UR;
+// Self-check bilinearity and shared-FinalExp Pair2Pre correctness
+chk_a := Random(1, ell_bls - 1);
+chk_b := Random(1, ell_bls - 1);
+assert Pair2Pre(chk_a * G1_E1, pre_G2, chk_b * G1_E1, pre_neg_DK)
+       eq g_T^((chk_a - chk_b * alpha_msk) mod ell_bls);
 
-pair_pub_tbl := BuildPowTable(pair_pub, 256);
-h_UR_tbl     := BuildPowTable(h_UR, 256);
-assert FastPow(h_UR_tbl, chk_a) eq h_UR^chk_a;
-
-// Build 64-bit Prefix-LUT in G_T for protocol [0..6560], precomputed gT_pow [0..3280],
+// Build 64-bit Prefix-LUT in G_T for protocol [0..6560]
 // and extended LUT_ext [0..9840] solely for Scenario 4 carry-avalanche analysis
-t_lut := Cputime();
 LUT := AssociativeArray();
 LUT_ext := AssociativeArray();
-gT_pow := [];
 cur := Fp12!1;
 for Z in [0..9840] do
-    if Z le 3280 then Append(~gT_pow, cur); end if;
     tag := PrefixTag64(cur);
     if Z le 6560 then LUT[tag] := Z; end if;
     LUT_ext[tag] := Z;
@@ -350,17 +341,17 @@ M_Out_full := m_mask + ConcatWR(w_out,  r_Out); // full differing cohort (Delta 
 assert (M_S + M_R) eq PadAttr(delta_in);
 assert (M_S + M_Out_cons) eq PadAttr(delta_out);
 
-// Dealer encrypts M_R into AC_R under h_UR = e(G1, S_UR) and provisions Helper
+// One-time Dealer provisioning: encrypt M_R into AC_R in G_1 x G_1 under P_pub
 t0 := Cputime();
 AC_A1_E1 := [];
-AC_A2    := [];
+AC_A2_E1 := [];
 for j in [1..n_rs] do
-    u_j  := Random(1, r_bls - 1);
+    u_j  := Random(1, ell_bls - 1);
     z_Rj := Pack3(M_R[j], F256);
     Append(~AC_A1_E1, u_j * G1_E1);
-    Append(~AC_A2, gT_pow[z_Rj + 1] * FastPow(h_UR_tbl, u_j));
+    Append(~AC_A2_E1, z_Rj * G1_E1 + u_j * P_pub_E1);
 end for;
-printf "  [Dealer] Encrypted 255B Access Code AC_R provisioned to Helper in %.3o sec.\n", Cputime(t0);
+printf "  [Dealer] 255B Encrypted Access Code AC_R (G_1 x G_1) built in %.3o sec.\n", Cputime(t0);
 
 // 192-byte monolithic payload kappa & scrambled codeword c = kappa * S * G_rs
 kappa  := ExpandPRG_Dense(7777, F256, k_rs);
@@ -394,52 +385,44 @@ assert y_seq eq y_trap;
 s_lock := y_seq mod 2^64; // HKDF-Extract simulation
 
 /*------------------------------------------------------------------------------
-  4. SCENARIO 1: DENSE MODE xi_lock + PER-COORDINATE SPLIT-KEY BLS12-381
+  4. SCENARIO 1: DENSE MODE xi_lock + 0-RTT STEALTH ABBE IN G_1 x G_1
 ------------------------------------------------------------------------------*/
-print "\n=== 3. SCENARIO 1: DENSE MODE (OTP) + SPLIT-KEY HELPER/MPC BROADCAST ===";
+print "\n=== 3. SCENARIO 1: DENSE MODE (OTP) + 0-RTT G_1 x G_1 BROADCAST ===";
 xi_lock_dense := ExpandPRG_Dense(s_lock, F256, n_rs);
 c_prime_dense := c_code + M_S + xi_i + xi_lock_dense;
 
-// Step 4A: Sender O(1) broadcast encapsulation (independent k_j per coordinate)
+// Step 4A: Sender O(1) 0-RTT broadcast encapsulation strictly in G_1 x G_1
 t0 := Cputime();
-C1_E1  := [];
-C2_vec := [];
+C1_E1 := [];
+C2_E1 := [];
 for j in [1..n_rs] do
-    k_j  := Random(1, r_bls - 1);
+    k_j  := Random(1, ell_bls - 1);
     z_Sj := Pack3(c_prime_dense[j], F256);
     Append(~C1_E1, k_j * G1_E1);
-    Append(~C2_vec, gT_pow[z_Sj + 1] * FastPow(pair_pub_tbl, k_j));
+    Append(~C2_E1, z_Sj * G1_E1 + k_j * P_pub_E1);
 end for;
 t_enc := Cputime(t0);
-printf "  [Sender]   255B O(1) Broadcast Encapsulation (per-byte k_j): %.3o sec\n", t_enc;
+printf "  [Sender]   255B O(1) 0-RTT Broadcast (G_1 x G_1):             %.3o sec\n", t_enc;
 
-// Step 4B: Helper / MPC blind split-key fusion (re-randomized via v_j)
-// Helper knows ONLY (pre_neg_H_R, h_UR, AC_R) — learns neither z_S nor z_R
+// Step 4B: Receiver local 0-RTT homomorphic addition CT_S + AC_R in G_1 x G_1
 t0 := Cputime();
-C1_tilde_E1 := [];
-C2_tilde    := [];
-for j in [1..n_rs] do
-    v_j  := Random(1, r_bls - 1);
-    c1_t := C1_E1[j] + AC_A1_E1[j] + v_j * G1_E1;
-    c2_t := C2_vec[j] * AC_A2[j] * PairPre(C1_E1[j], pre_neg_H_R) * FastPow(h_UR_tbl, v_j);
-    Append(~C1_tilde_E1, c1_t);
-    Append(~C2_tilde, c2_t);
-end for;
-t_helper := Cputime(t0);
-printf "  [Helper]   255B Blind Split-Key Fusion in G_T:               %.3o sec\n", t_helper;
+C1_hat_E1 := [C1_E1[j] + AC_A1_E1[j] : j in [1..n_rs]];
+C2_hat_E1 := [C2_E1[j] + AC_A2_E1[j] : j in [1..n_rs]];
+t_add := Cputime(t0);
+printf "  [Receiver] 255B Local 0-RTT Homomorphic Add (G_1 x G_1):      %.4o sec\n", t_add;
 
-// Step 4C: Receiver single-pairing decryption (uses ONLY pre_neg_S_UR) + Prefix-LUT
+// Step 4C: Receiver dual-pairing projection (shared FinalExp) + 64-bit Prefix-LUT
 t0 := Cputime();
 c_pre_seq := [];
 for j in [1..n_rs] do
-    Pj := C2_tilde[j] * PairPre(C1_tilde_E1[j], pre_neg_S_UR);
+    Pj := Pair2Pre(C2_hat_E1[j], pre_G2, C1_hat_E1[j], pre_neg_DK);
     ok_lut, Zj := IsDefined(LUT, PrefixTag64(Pj));
     assert ok_lut;
     Append(~c_pre_seq, Unpack3(Zj, F256));
 end for;
 c_pre := Vector(F256, c_pre_seq);
 t_recv := Cputime(t0);
-printf "  [Receiver] 255B Single-Pairing Decrypt + G_T LUT Unpack:     %.3o sec\n", t_recv;
+printf "  [Receiver] 255B Dual-Pairing Decrypt (Shared FE) + LUT:       %.3o sec\n", t_recv;
 assert c_pre eq (c_prime_dense + M_R);
 
 // Test A: Pre-release (t < T) — Authorized node tries to decode without stripping
@@ -505,24 +488,24 @@ printf "  [Out-of-Cohort, Full]      Post-Strip wt = %o (>> J = 34) | RS Decode:
 assert not ok_out_full;
 
 /*------------------------------------------------------------------------------
-  7. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_T)
+  7. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_1 x G_1)
 ------------------------------------------------------------------------------*/
-print "\n=== 6. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_T) ===";
+print "\n=== 6. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_1 x G_1) ===";
 M_3 := ExpandPRG_Dense(9090, F256, n_rs);
 
-// Colluding Helper fuses a 3rd encrypted Access Code AC_3 (under h_UR) into CT_tilde
+// Unauthorized relay/coalition aggregates a 3rd encrypted operand in G_1 x G_1
 t0 := Cputime();
 lut_misses  := 0;
 carry_flips := 0;
 avalanche_seq := [];
 for j in [1..n_rs] do
-    u3_j := Random(1, r_bls - 1);
+    u3_j := Random(1, ell_bls - 1);
     z_3j := Pack3(M_3[j], F256);
-    c1_coal := C1_tilde_E1[j] + u3_j * G1_E1;
-    c2_coal := C2_tilde[j] * gT_pow[z_3j + 1] * FastPow(h_UR_tbl, u3_j);
+    c1_coal := C1_hat_E1[j] + u3_j * G1_E1;
+    c2_coal := C2_hat_E1[j] + z_3j * G1_E1 + u3_j * P_pub_E1;
 
-    // Receiver decrypts fused 3-operand ciphertext with pre_neg_S_UR
-    P_coal := c2_coal * PairPre(c1_coal, pre_neg_S_UR);
+    // Dual-pairing projection to G_T (shared FinalExp)
+    P_coal := Pair2Pre(c2_coal, pre_G2, c1_coal, pre_neg_DK);
     tag := PrefixTag64(P_coal);
     ok_std, _ := IsDefined(LUT, tag);
     if not ok_std then lut_misses +:= 1; end if;
