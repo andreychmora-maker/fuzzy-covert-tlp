@@ -322,8 +322,14 @@ printf "  BLS12-381 Setup, OptAte Precomp & G_T LUT built in %.3o sec.\n", Cputi
 /*------------------------------------------------------------------------------
   2. COHORT PROVISIONING, ENCRYPTED ACCESS CODE AC_R & MONOLITHIC PAYLOAD
 ------------------------------------------------------------------------------*/
-w_mask := ExpandPRG_Dense(1001, F256, n_rs);
+// Instance-specific blinding factor m in F_256^255 (wt(m) > aleph)
+// Cohort-isolating blocker w in F_256^127 (active slice of w in F_256^128 on
+// the punctured 255B cyclic RS core; wt(w) > aleph)
+w_len  := n_rs - 128; // 127 bytes
+w_mask := ExpandPRG_Dense(1001, F256, w_len);
+w_out  := ExpandPRG_Dense(1002, F256, w_len); // differing-cohort blocker
 m_mask := ExpandPRG_Dense(2002, F256, n_rs);
+assert (Weight(w_mask) gt aleph) and (Weight(w_out) gt aleph) and (Weight(m_mask) gt aleph);
 
 // Sender attributes r_S, In-cohort r_R (d_H = 8), Out-of-cohort r_Out (d_H = 64)
 r_S := ExpandPRG_Dense(3003, F256, 128);
@@ -332,11 +338,17 @@ delta_out := ExpandPRG_Sparse(5005, F256, 128, 64);
 r_R   := r_S + delta_in;
 r_Out := r_S + delta_out;
 
-// Embed attributes in right half (0_127 || r_128) to fit 255B RS core
-PadAttr := func<r | Vector(F256, [F256!0 : i in [1..127]] cat Eltseq(r))>;
-M_S   := w_mask + m_mask + PadAttr(r_S);
-M_R   := w_mask + m_mask + PadAttr(r_R);
-M_Out := w_mask + m_mask + PadAttr(r_Out);
+// Concatenation (w || r) in F_256^255 and zero-padded attribute diff (0_127 || dr)
+ConcatWR := func<w_vec, r_vec | Vector(F256, Eltseq(w_vec) cat Eltseq(r_vec))>;
+PadAttr  := func<r_vec | Vector(F256, [F256!0 : i in [1..w_len]] cat Eltseq(r_vec))>;
+
+// M = m + (w || r): same-cohort cancels both m and w -> (0_127 || delta_r)
+M_S        := m_mask + ConcatWR(w_mask, r_S);
+M_R        := m_mask + ConcatWR(w_mask, r_R);
+M_Out_cons := m_mask + ConcatWR(w_mask, r_Out); // conservative (neglecting Delta w)
+M_Out_full := m_mask + ConcatWR(w_out,  r_Out); // full differing cohort (Delta w + Delta r)
+assert (M_S + M_R) eq PadAttr(delta_in);
+assert (M_S + M_Out_cons) eq PadAttr(delta_out);
 
 // Dealer encrypts M_R into AC_R under h_UR = e(G1, S_UR) and provisions Helper
 t0 := Cputime();
@@ -468,7 +480,7 @@ printf "  [Theorem 1]     Symbol-Cancellation Grinding Bound: Pr <= %.3o (~ 2^-%
        prob_grind, bits_grind;
 assert W_sp ge d_min;
 
-c_pre_sp := c_code + PadAttr(delta_in) + e_pre_sparse;
+c_pre_sp := c_code + (M_S + M_R) + e_pre_sparse;
 ok_sp_pre, _ := BoundedRSDecode(C_rs, c_pre_sp, aleph);
 ok_sp_post, cw_sp := BoundedRSDecode(C_rs, c_pre_sp + xi_lock_sparse, aleph);
 printf "  [Sparse Decode] Before T: %o | After Stripping xi_lock: %o\n", ok_sp_pre, ok_sp_post;
@@ -478,11 +490,19 @@ assert (not ok_sp_pre) and ok_sp_post and (cw_sp eq c_code);
   6. SCENARIO 3: OUT-OF-COHORT SOLVER (d_H = 64) AFTER RELEASE (t >= T)
 ------------------------------------------------------------------------------*/
 print "\n=== 5. SCENARIO 3: OUT-OF-COHORT ISOLATION (d_H = 64, t >= T) ===";
-c_out_stripped := c_code + PadAttr(delta_out) + xi_i;
-ok_out, _ := BoundedRSDecode(C_rs, c_out_stripped, aleph);
-printf "  [Out-of-Cohort] Post-Strip wt = %o (>> J = 34) | RS Decode: %o -> ISOLATED!\n",
-       Weight(c_out_stripped - c_code), ok_out;
-assert not ok_out;
+// Conservative bound (neglecting Delta w, Proposition 1): M_S + M_Out_cons = (0 || delta_out)
+c_out_cons := c_code + (M_S + M_Out_cons) + xi_i;
+ok_out_cons, _ := BoundedRSDecode(C_rs, c_out_cons, aleph);
+printf "  [Out-of-Cohort, Delta_w=0] Post-Strip wt = %o (>> J = 34) | RS Decode: %o -> ISOLATED!\n",
+       Weight(c_out_cons - c_code), ok_out_cons;
+assert not ok_out_cons;
+
+// Full differing cohort (Delta w != 0 and Delta r): M_S + M_Out_full = (Delta w || delta_out)
+c_out_full := c_code + (M_S + M_Out_full) + xi_i;
+ok_out_full, _ := BoundedRSDecode(C_rs, c_out_full, aleph);
+printf "  [Out-of-Cohort, Full]      Post-Strip wt = %o (>> J = 34) | RS Decode: %o -> ISOLATED!\n",
+       Weight(c_out_full - c_code), ok_out_full;
+assert not ok_out_full;
 
 /*------------------------------------------------------------------------------
   7. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_T)
