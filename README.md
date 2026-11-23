@@ -25,16 +25,14 @@ The **FCTLP** resolves these limitations by decoupling the temporal barrier from
 
 ## Empirical Verification & Benchmark (`fctlp_bls12_381_poc.m`)
 
-The complete proof-of-concept and cryptanalytic test suite runs directly in the **Magma Online Calculator** (`http://magma.maths.usyd.edu.au/calc/`) in **15.570 seconds** (well within the 60-second web sandbox limit).
-
 ### Console Output (`Magma V2.29`)
 
 ```text
 === 1. SETUP: RS[255,192,64]_256 + RSW 2048-BIT + BLS12-381 ===
   RS[255, 192, 64]_256 & Secret S in GL(192, F_256) ready.
-  RSW 2048-bit Modulus N generated in 0.240 sec (Delay T = 5000).
-  BLS12-381 Setup, OptAte Precomp & G_T LUT built in 0.980 sec.
-  [Dealer] Encrypted 255B Access Code AC_R provisioned to Helper in 1.200 sec.
+  RSW 2048-bit Modulus N generated in 0.170 sec (Delay T = 5000).
+  BLS12-381 Setup, OptAte Precomp & G_T LUT built in 0.990 sec.
+  [Dealer] Encrypted 255B Access Code AC_R provisioned to Helper in 1.190 sec.
 
 === 2. LAYER 1: RSW TRAPDOOR GENERATION vs. SEQUENTIAL SOLVING ===
   [Sender] Trapdoor y = a^(2^T mod phi(N)) mod N: 0.0100 sec
@@ -42,36 +40,40 @@ The complete proof-of-concept and cryptanalytic test suite runs directly in the 
 
 === 3. SCENARIO 1: DENSE MODE (OTP) + SPLIT-KEY HELPER/MPC BROADCAST ===
   [Sender]   255B O(1) Broadcast Encapsulation (per-byte k_j): 1.200 sec
-  [Helper]   255B Blind Split-Key Fusion in G_T:               4.390 sec
-  [Receiver] 255B Single-Pairing Decrypt + G_T LUT Unpack:     3.080 sec
-  [t < T, Dense]  Residual wt = 254 (>> 63) | RS Decode: false -> BLOCKED!
+  [Helper]   255B Blind Split-Key Fusion in G_T:               4.380 sec
+  [Receiver] 255B Single-Pairing Decrypt + G_T LUT Unpack:     3.060 sec
+  [t < T, Dense]  Residual wt = 253 (>> 63) | RS Decode: false -> BLOCKED!
   [t >= T, Dense] Residual wt = 29 (<= 31) | RS Decode: true | Payload Match: true (0.0100 sec)
 
 === 4. SCENARIO 2: SPARSE MODE (w_lock = 52) & THEOREM 1 BARRIER ===
-  [t < T, Sparse] W = wt(xi_i + xi_lock) = 69 (>= d_min = 64 -> Erasure-Only IMPOSSIBLE)
-  [Theorem 1]     Symbol-Cancellation Grinding Bound: Pr <= 4.808E-118 (~ 2^-389.7)
+  [t < T, Sparse] W = wt(xi_i + xi_lock) = 70 (>= d_min = 64 -> Erasure-Only IMPOSSIBLE)
+  [Theorem 1]     Symbol-Cancellation Grinding Bound: Pr <= 6.082E-121 (~ 2^-399.3)
   [Sparse Decode] Before T: false | After Stripping xi_lock: true
 
 === 5. SCENARIO 3: OUT-OF-COHORT ISOLATION (d_H = 64, t >= T) ===
-  [Out-of-Cohort] Post-Strip wt = 81 (>> J = 34) | RS Decode: false -> ISOLATED!
+  [Out-of-Cohort, Delta_w=0] Post-Strip wt = 81 (>> J = 34) | RS Decode: false -> ISOLATED!
+  [Out-of-Cohort, Full]      Post-Strip wt = 193 (>> J = 34) | RS Decode: false -> ISOLATED!
 
 === 6. SCENARIO 4: PROTOCOL-LEVEL BASE-3 CARRY AVALANCHE (m = 3 IN G_T) ===
-  [Coalition m=3] Std LUT Misses (Z>6560): 37 / 255 | Direct Carry Flips: 152 / 255
-  [Coalition m=3] Post-Strip Corrupted Wt = 252 / 255 | RS Decode: false -> AVALANCHE! (4.380 sec)
+  [Coalition m=3] Std LUT Misses (Z>6560): 61 / 255 | Direct Carry Flips: 170 / 255
+  [Coalition m=3] Post-Strip Corrupted Wt = 252 / 255 | RS Decode: false -> AVALANCHE! (4.370 sec)
 
-=== ALL FCTLP VERIFICATION SCENARIOS PASSED IN 15.570 SEC ===
+=== ALL FCTLP VERIFICATION SCENARIOS PASSED IN 15.460 SEC ===
 ```
 
-### Verification Summary Table
+## Benchmark & Verification Summary (`Magma V2.29`)
 
-| Scenario | Operational / Adversarial Test Case | Observed Weight `wt(e)` | Bound (ℵ = 31, <i>J</i> = 34, <i>d</i><sub>min</sub> = 64) | RS Decode | Security Verdict |
+Executed end-to-end in **15.460 sec** (`RSW 2048-bit`: `0.170 s` modulus setup, `0.010 s` trapdoor vs. `0.020 s` for 5,000 sequential squarings; `BLS12-381`: `0.990 s` setup & LUT, `1.190 s` Dealer AC<sub><i>R</i></sub>, `1.200 s` Sender &#119978;(1) broadcast, `4.380 s` Helper blind fusion, `3.060 s` Receiver single-pairing decrypt + LUT unpack, `0.010 s` RS decode + <b>S</b><sup>−1</sup> recovery):
+
+| Scenario | Operational / Adversarial Test Case | Observed Weight `wt(e)` | Bound (ℵ = 31, <i>J</i> = 34, <i>d</i><sub>min</sub> = 64) | RS Decode | Verdict |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| **Sc. 1A** | Pre-Release Authorized Node (<i>t</i> &lt; <i>T</i>, Dense OTP <b><i>ξ</i></b><sub>lock</sub>) | `254 / 255` | `>> 63` | `false` | 🛡️ Blocked (Sequential <i>T</i> + OTP) |
-| **Sc. 1B** | Post-Release In-Cohort Receiver (<i>t</i> ≥ <i>T</i>, <i>d</i><sub>H</sub>(<b><i>r</i></b><sub><i>S</i></sub>, <b><i>r</i></b><sub><i>R</i></sub>) = 8) | `29` | `<= 31` | `true` | ✅ Valid Blind Decode (<b><i>κ</i></b>' = <b><i>κ</i></b>) |
-| **Sc. 2A** | Pre-Release Sparse Mode (<i>t</i> &lt; <i>T</i>, <i>w</i><sub>lock</sub> = 52, Theorem 1) | `69` | `>= 64` | `false` | 🛡️ No Erasure Bypass &amp; Pr ≤ 2<sup>−389.7</sup> |
+| **Sc. 1A** | Pre-Release Authorized Node (<i>t</i> &lt; <i>T</i>, Dense OTP <b><i>ξ</i></b><sub>lock</sub>) | `253 / 255` | `>> 63` | `false` | 🛡️ Blocked (Sequential <i>T</i> + OTP) |
+| **Sc. 1B** | Post-Release In-Cohort Receiver (<i>t</i> ≥ <i>T</i>, <i>d</i><sub>H</sub> = 8) | `29` | `<= 31` | `true` | ✅ Exact Payload Match (<b><i>κ</i></b>' = <b><i>κ</i></b>) |
+| **Sc. 2A** | Pre-Release Sparse Mode (<i>t</i> &lt; <i>T</i>, <i>w</i><sub>lock</sub> = 52, Theorem 1) | `70` | `>= 64` | `false` | 🛡️ No Erasure Bypass &amp; Pr ≤ 2<sup>−399.3</sup> |
 | **Sc. 2B** | Post-Release Sparse Mode after Stripping <b><i>ξ</i></b><sub>lock</sub> (<i>d</i><sub>H</sub> = 8) | `29` | `<= 31` | `true` | ✅ Valid Multi-Stage Release |
-| **Sc. 3** | Out-of-Cohort Solver after Release (<i>t</i> ≥ <i>T</i>, <i>d</i><sub>H</sub> = 64) | `81` | `>> 34` | `false` | 🛡️ Isolated (&gt; 312-Bit Barrier) |
-| **Sc. 4** | Protocol-Level Coalition (<i>m</i> = 3 in &#120126;<sub><i>T</i></sub>: `37` LUT misses, `152` carry flips) | `252 / 255` | `>> 34` | `false` | 🛡️ Base-3 Carry Avalanche |
+| **Sc. 3A** | Out-of-Cohort Solver after Release (<i>t</i> ≥ <i>T</i>, <i>d</i><sub>H</sub> = 64, Δ<b>w</b> = <b>0</b>) | `81` | `>> 34` | `false` | 🛡️ Isolated (&gt; 312-Bit Barrier) |
+| **Sc. 3B** | Full Differing Cohort after Release (<i>t</i> ≥ <i>T</i>, <i>d</i><sub>H</sub> = 64, Δ<b>w</b> ≠ <b>0</b>) | `193` | `>> 34` | `false` | 🛡️ Isolated (Δ<b>w</b> ‖ Δ<b>r</b> Barrier) |
+| **Sc. 4** | Protocol-Level Coalition (<i>m</i> = 3 in &#120126;<sub><i>T</i></sub>: `61` LUT misses, `170` carry flips) | `252 / 255` | `>> 34` | `false` | 🛡️ Base-3 Carry Avalanche |
 
 ## Related Research Series
 
